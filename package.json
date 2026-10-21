@@ -1,0 +1,22 @@
+{
+  "name": "telepass",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Low-resource Telegram userbot with persistent SQLite forwarding queue and Persian administration",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --max-old-space-size=160 src/main.js",
+    "login": "node --max-old-space-size=160 src/login.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/main.js && node --check src/login.js && npm test"
+  },
+  "dependencies": {
+    "big-integer": "^1.6.52",
+    "dotenv": "^16.6.1",
+    "proper-lockfile": "^4.1.2",
+    "teleproto": "^1.230.1"
+  }
+}

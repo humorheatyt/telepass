@@ -1,0 +1,30 @@
+[Unit]
+Description=Telepass Telegram userbot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=telepass
+Group=telepass
+WorkingDirectory=/opt/telepass
+EnvironmentFile=/opt/telepass/.env
+ExecStart=/usr/bin/node --max-old-space-size=160 /opt/telepass/src/main.js
+Restart=on-failure
+RestartSec=35
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/telepass/data
+MemoryMax=512M
+CPUQuota=50%
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
