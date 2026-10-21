@@ -11,7 +11,8 @@
     "start": "node --max-old-space-size=160 src/main.js",
     "login": "node --max-old-space-size=160 src/login.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/main.js && node --check src/login.js && npm test"
+    "check": "node --check src/main.js && node --check src/login.js && npm test",
+    "session": "node --max-old-space-size=160 src/login.js --print-session"
   },
   "dependencies": {
     "big-integer": "^1.6.52",
