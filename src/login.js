@@ -8,7 +8,8 @@ import { UserError, friendlyError } from './errors.js';
 async function main() {
   process.umask(0o077);
   const config = loadConfig();
-  if (!stdin.isTTY) throw new UserError('ورود اولیه به ترمینال تعاملی نیاز دارد. روی رایانهٔ مطمئن npm run login را اجرا و پوشهٔ data را امن به سرور منتقل کنید.');
+  const printSession = process.argv.includes('--print-session');
+  if (!stdin.isTTY) throw new UserError('ورود اولیه به ترمینال تعاملی نیاز دارد. روی رایانهٔ مطمئن npm run login را اجرا کنید (برای میزبان بدون ترمینال از --print-session استفاده کنید) و فقط رشتهٔ نشست را امن منتقل کنید.');
   const release = await acquireLock(config.sessionPath);
   let client;
   let rl;
@@ -22,7 +23,7 @@ async function main() {
       try { return (await rl.question('')).trim(); }
       finally { muted = false; if (secret) stdout.write('\n'); }
     };
-    client = createClient(config, readSession(config.sessionPath));
+    client = createClient(config, config.session || readSession(config.sessionPath));
     await client.start({
       phoneNumber: async () => config.phone || await ask('Phone (+country code): '),
       phoneCode: async () => await ask('Telegram login code (hidden): ', true),
@@ -32,8 +33,18 @@ async function main() {
     if (!await client.checkAuthorization()) throw new UserError('ورود موفق نبود؛ دوباره تلاش کنید.');
     const me = await client.getMe();
     if (me.id.toString() === ADMIN_ID) throw new UserError('اکانت یوزربات باید از اکانت ادمین جدا باشد. با شمارهٔ دیگری وارد شوید.');
-    saveSession(client, config.sessionPath);
-    console.log('نشست به‌صورت امن در DATA_DIR ذخیره شد؛ اکنون npm start را اجرا کنید. کد و رمز ذخیره نشده‌اند.');
+    const value = client.session.save();
+    try { saveSession(client, config.sessionPath); }
+    catch (error) { console.error(`هشدار: ذخیرهٔ فایل نشست انجام نشد (${error.code || 'ERROR'})؛ فقط رشتهٔ چاپ‌شده را نگه دارید.`); }
+    if (printSession) {
+      stdout.write('\n=== TELEGRAM_SESSION ===\n');
+      stdout.write(`${value}\n`);
+      stdout.write('========================\n');
+      stdout.write('این رشته مثل رمز عبور است: آن را در متغیر محیطی محرمانهٔ میزبان (TELEGRAM_SESSION) بگذارید، در Git/چت/لاگ نگذارید.\n');
+    } else {
+      console.log('نشست به‌صورت امن در DATA_DIR ذخیره شد؛ اکنون npm start را اجرا کنید. کد و رمز ذخیره نشده‌اند.');
+      console.log('برای میزبانی که ترمینال یا دیسک دائمی ندارد: npm run login -- --print-session و سپس مقدار TELEGRAM_SESSION را در پنل میزبان تنظیم کنید.');
+    }
   } finally {
     rl?.close();
     await client?.destroy();

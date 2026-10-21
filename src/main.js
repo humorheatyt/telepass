@@ -1,21 +1,18 @@
 import { createServer } from 'node:http';
-import { chmodSync } from 'node:fs';
 import { NewMessage } from 'teleproto/events';
 import { loadConfig, ADMIN_ID } from './config.js';
 import { Store } from './db.js';
-import { createClient, readSession, saveSession, acquireLock } from './telegram.js';
+import { createClient, resolveSession, saveSession, acquireLock } from './telegram.js';
 import { Commands } from './commands.js';
 import { PeerService, peerRecord } from './peers.js';
 import { ForwardWorker } from './worker.js';
 import { createHandler } from './handler.js';
-import { UserError, friendlyError, logError } from './errors.js';
+import { UserError, friendlyError, logError, errorCode } from './errors.js';
 
 async function main() {
   process.umask(0o077);
   const config = loadConfig();
-  const session = readSession(config.sessionPath);
-  if (!session) throw new UserError('نشست موجود نیست؛ ابتدا npm run login را در ترمینال اجرا کنید.');
-  chmodSync(config.sessionPath, 0o600);
+  const session = await resolveSession(config);
   let stopping = false, ready = false;
   let client, store, worker, health, maintenance, sessionTimer, release;
   const activeHandlers = new Set();
@@ -44,12 +41,36 @@ async function main() {
   process.once('SIGTERM', () => { void stop(); });
   process.once('SIGINT', () => { void stop(); });
   try {
+    // Bind the port before touching the network: hosts that publish a PORT and wait for it
+    // (Botkeep, Faable, Render, ...) kill the app if nothing listens in time.
+    if (config.port) {
+      health = createServer((req, res) => {
+        if (req.url !== '/health') { res.writeHead(404); res.end(); return; }
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
+        const ok = ready && !stopping && !!client?.connected;
+        res.writeHead(ok ? 200 : 503);
+        res.end(JSON.stringify({ ok }));
+      });
+      await new Promise((resolve, reject) => {
+        health.once('error', reject);
+        health.listen(config.port, '0.0.0.0', resolve);
+      }).catch(error => {
+        if (error.code === 'EADDRINUSE') throw new UserError(`پورت ${config.port} در حال استفاده است؛ PORT را از پنل میزبان بگیرید یا نمونهٔ دیگری را ببندید.`);
+        throw new UserError(`سرور health روی پورت ${config.port} بالا نیامد (${error.code || 'ERROR'}).`);
+      });
+      health.on('error', error => { logError('health', error); void stop(1); });
+      console.log(`Health endpoint listening on 0.0.0.0:${config.port}/health`);
+    }
     release = await acquireLock(config.sessionPath, () => { void stop(1); });
     if (stopping) { await release(); return; }
     store = new Store(config.dbPath);
     store.prune();
     client = createClient(config, session);
-    await client.connect();
+    try { await client.connect(); }
+    catch (error) {
+      throw new UserError(`اتصال به تلگرام برقرار نشد (${errorCode(error)}). نشست را دوباره بسازید و دسترسی خروجی شبکهٔ میزبان به دیتاسنترهای تلگرام را بررسی کنید.`);
+    }
     if (stopping) return;
     const authorized = await client.checkAuthorization();
     if (stopping) return;
@@ -71,23 +92,12 @@ async function main() {
       promise.finally(() => activeHandlers.delete(promise));
       return promise;
     }, new NewMessage({}));
-    saveSession(client, config.sessionPath);
+    try { saveSession(client, config.sessionPath); }
+    catch (error) { logError('session_save', error); }
     worker = new ForwardWorker(client, store);
     worker.start();
     maintenance = setInterval(() => { try { store.prune(); } catch (e) { logError('maintenance', e); } }, 3600000);
     sessionTimer = setInterval(() => { try { saveSession(client, config.sessionPath); } catch (e) { logError('session_save', e); } }, 60000);
-    if (config.port) {
-      health = createServer((req, res) => {
-        if (req.url !== '/health') { res.writeHead(404); res.end(); return; }
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Cache-Control', 'no-store');
-        const ok = ready && !!client.connected && !stopping;
-        res.writeHead(ok ? 200 : 503);
-        res.end(JSON.stringify({ ok }));
-      });
-      await new Promise((resolve, reject) => { health.once('error', reject); health.listen(config.port, '0.0.0.0', resolve); });
-      health.on('error', error => { logError('health', error); void stop(1); });
-    }
     if (stopping) return;
     ready = true;
     console.log('Telepass آماده است. از اکانت ادمین به این اکانت /menu بفرستید.');
