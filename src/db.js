@@ -61,8 +61,8 @@ export class Store {
   hasSource(id) { return !!this.db.prepare('SELECT 1 FROM sources WHERE peer_id=?').get(String(id)); }
   addSource(id) {
     const p = this.peer(id);
-    if (!p || p.kind === 'user') throw new UserError('مبدأ باید گروه یا کانال باشد.');
-    if (this.get('destination') === id) throw new UserError('مبدأ و مقصد نباید یکسان باشند.');
+    if (!p || p.kind === 'user') throw new UserError('A source must be a group or channel.');
+    if (this.get('destination') === id) throw new UserError('A source and destination cannot be the same.');
     this.db.prepare('INSERT OR IGNORE INTO sources VALUES (?)').run(id);
   }
   removeSource(id) {
@@ -76,27 +76,26 @@ export class Store {
   rule(id) { return this.db.prepare('SELECT r.*,p.kind FROM rules r JOIN peers p ON p.id=r.peer_id WHERE r.id=?').get(id); }
   addRule(peerId) {
     const p = this.peer(peerId);
-    if (!p || !['user', 'channel'].includes(p.kind)) throw new UserError('وایت‌لیست باید شخص یا کانال باشد، نه گروه معمولی.');
+    if (!p || !['user', 'channel', 'supergroup', 'chat'].includes(p.kind)) throw new UserError('Whitelist entries must be users, groups, or channels.');
     this.db.prepare('INSERT OR IGNORE INTO rules(peer_id) VALUES (?)').run(peerId);
     return this.ruleFor(peerId);
   }
   removeRule(id) {
-    if (!this.rule(id)) throw new UserError('شمارهٔ قانون پیدا نشد.');
+    if (!this.rule(id)) throw new UserError('Whitelist rule not found.');
     this.transaction(() => {
       this.db.prepare('DELETE FROM rules WHERE id=?').run(id);
       this.db.prepare("DELETE FROM jobs WHERE rule_id=? AND status='pending'").run(id);
     });
   }
   toggle(id, field, value) {
-    if (!['forwards', 'replies'].includes(field)) throw new UserError('گزینه نامعتبر است.');
+    if (!['forwards', 'replies'].includes(field)) throw new UserError('Invalid setting.');
     const rule = this.rule(id);
-    if (!rule) throw new UserError('شمارهٔ قانون پیدا نشد.');
-    if (field === 'replies' && rule.kind !== 'user') throw new UserError('گزینهٔ ریپلای فقط برای شخص است.');
+    if (!rule) throw new UserError('Whitelist rule not found.');
     this.db.prepare(`UPDATE rules SET ${field}=? WHERE id=?`).run(value ? 1 : 0, id);
   }
   setDestination(id) {
-    if (this.hasSource(id)) throw new UserError('مقصد نباید از مبدأها باشد؛ ابتدا مبدأ را حذف کنید.');
-    if (this.pendingCount() && this.get('destination') !== id) throw new UserError('ابتدا صف را تخلیه یا با /queue clear confirm پاک کنید.');
+    if (this.hasSource(id)) throw new UserError('The destination cannot be a source; remove it from the source list first.');
+    if (this.pendingCount() && this.get('destination') !== id) throw new UserError('Drain the queue first, or clear it with /queue clear confirm.');
     this.set('destination', id);
   }
   pendingCount() { return this.db.prepare("SELECT count(*) AS n FROM jobs WHERE status='pending'").get().n; }

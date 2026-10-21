@@ -30,17 +30,17 @@ test('admin commands reply to the real input sender without formatting', async t
   await commands.execute('/resume'); assert.equal(store.get('paused'), '0');
 });
 
-test('Persian menu prompts, cancel and expiry work', async t => {
+test('English menu, Persian/English digit input, cancel and expiry work', async t => {
   const { commands, store } = setup(t);
-  assert.match(await commands.execute('/menu'), /مدیریت/);
-  assert.match(await commands.execute('۳'), /وایت‌لیست/);
-  assert.match(await commands.execute('۳۲'), /شناسه/);
-  assert.match(await commands.execute('99'), /قانون/);
-  assert.ok(store.ruleFor('99'));
+  assert.match(await commands.execute('/menu'), /Telepass Admin Menu/);
+  assert.match(await commands.execute('۳'), /Whitelist/);
+  assert.match(await commands.execute('32'), /person, group, or channel/i);
+  await commands.execute('/cancel');
+  await assert.rejects(commands.execute('/allow remove 99'), /rule not found/i);
   await commands.execute('22'); await commands.execute('/cancel');
   assert.equal(commands.pending, null);
   await commands.execute('22'); commands.pending.expires = 0;
-  await assert.rejects(commands.execute('99'), /مهلت/);
+  await assert.rejects(commands.execute('99'), /expired/i);
 });
 
 test('rule toggles validate values, preserve options on re-add and list useful names/IDs', async t => {

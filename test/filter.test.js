@@ -40,6 +40,20 @@ test('forward toggle applies independently per rule, including channel posts', t
   assert.ok(matchMessage(store, { ...post, fwdFrom: undefined }));
 });
 
+test('group whitelist supports anonymous send-as-group messages with independent per-rule options', async t => {
+  const { store } = fixture(); t.after(() => store.close());
+  const groupRule = store.addRule('-100111');
+  store.toggle(groupRule.id, 'forwards', false);
+  store.toggle(groupRule.id, 'replies', true);
+  const anonymous = message({ senderId: '-100111', replyTo: { replyToMsgId: 8 } });
+  assert.equal(matchMessage(store, { ...anonymous, fwdFrom: {} }), null);
+  assert.equal(matchMessage(store, anonymous).rule.id, groupRule.id);
+  await createHandler(store, {})({ message: anonymous });
+  const jobs = store.db.prepare('SELECT message_id,rule_id FROM jobs ORDER BY id').all();
+  assert.deepEqual(jobs.map(job => job.message_id), [8, 10]);
+  assert.ok(jobs.every(job => job.rule_id === groupRule.id));
+});
+
 test('reply context queues before response and repeated events deduplicate', async t => {
   const { store, rule } = fixture(); t.after(() => store.close());
   const handler = createHandler(store, {});
