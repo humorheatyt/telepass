@@ -16,5 +16,5 @@ export function matchMessage(store, message) {
   if (!sender) return null;
   const rule = store.ruleFor(sender);
   if (!rule || (message.fwdFrom && !rule.forwards)) return null;
-  return { source, destination, rule, includeReply: rule.kind === 'user' && !!rule.replies };
+  return { source, destination, rule, includeReply: !!rule.replies };
 }

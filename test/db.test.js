@@ -37,10 +37,16 @@ test('source/destination loop and destination changes with pending jobs are reje
 test('validates whitelist types, options and deletion IDs', t => {
   const { store, rule, peer } = fixture(); t.after(() => store.close());
   peer('-33', 'chat');
-  assert.throws(() => store.addRule('-33'));
-  assert.throws(() => store.addRule('-100111'));
+  const basicGroup = store.addRule('-33');
+  assert.equal(basicGroup.kind, 'chat');
   const channel = store.addRule('-100222');
-  assert.throws(() => store.toggle(channel.id, 'replies', true));
+  assert.doesNotThrow(() => store.toggle(channel.id, 'replies', true));
+  const group = store.addRule('-100111');
+  assert.equal(group.kind, 'supergroup');
+  store.toggle(group.id, 'forwards', false);
+  store.toggle(group.id, 'replies', true);
+  assert.equal(store.rule(group.id).forwards, 0);
+  assert.equal(store.rule(group.id).replies, 1);
   assert.throws(() => store.toggle(rule.id, 'injected', true));
   assert.throws(() => store.removeRule(100));
 });

@@ -4,17 +4,17 @@ import { UserError } from './errors.js';
 
 export function parseReference(input) {
   const text = String(input || '').trim();
-  if (!text || /\s/.test(text)) throw new UserError('یک شناسه یا لینک بدون فاصله وارد کنید.');
+  if (!text || /\s/.test(text)) throw new UserError('Enter an ID or link without spaces.');
   if (/^-?\d+$/.test(text)) return { type: 'id', value: bigInt(text).toString() };
   if (/^\+[1-9]\d{7,14}$/.test(text)) return { type: 'phone', value: text };
   if (/^@[a-z][a-z0-9_]{3,31}$/i.test(text)) return { type: 'username', value: text.slice(1) };
   let url;
   try { url = new URL(/^[a-z]+:\/\//i.test(text) ? text : `https://${text}`); }
-  catch { throw new UserError('فرمت شناسه نامعتبر است.'); }
+  catch { throw new UserError('Invalid reference format.'); }
   if (!['https:', 'http:'].includes(url.protocol) || !['t.me', 'telegram.me', 'www.t.me'].includes(url.hostname) || url.port || url.username || url.password) {
     // Bare usernames are also accepted, but never arbitrary URLs.
     if (/^[a-z][a-z0-9_]{3,31}$/i.test(text)) return { type: 'username', value: text };
-    throw new UserError('فقط لینک t.me، یوزرنیم یا شناسهٔ عددی پذیرفته می‌شود.');
+    throw new UserError('Only t.me links, usernames, or numeric IDs are accepted.');
   }
   const parts = url.pathname.split('/').filter(Boolean);
   if (parts[0] === 'joinchat' && /^[\w-]+$/.test(parts[1] || '')) return { type: 'invite', value: parts[1] };
@@ -22,7 +22,7 @@ export function parseReference(input) {
   if (parts[0] === 'c' && /^\d+$/.test(parts[1] || '')) return { type: 'id', value: `-100${parts[1]}` };
   const name = parts[0] === 's' ? parts[1] : parts[0];
   if (/^[a-z][a-z0-9_]{3,31}$/i.test(name || '')) return { type: 'username', value: name };
-  throw new UserError('لینک تلگرام قابل شناسایی نیست.');
+  throw new UserError('Unrecognized Telegram link.');
 }
 
 export function peerRecord(entity, reference = '') {
@@ -30,7 +30,7 @@ export function peerRecord(entity, reference = '') {
   if (entity instanceof Api.User) kind = 'user';
   else if (entity instanceof Api.Channel) kind = entity.megagroup || entity.gigagroup ? 'supergroup' : 'channel';
   else if (entity instanceof Api.Chat) kind = 'chat';
-  else throw new UserError('این موجودیت قابل استفاده نیست.');
+  else throw new UserError('This entity cannot be used.');
   return {
     id: utils.getPeerId(entity).toString(), kind, raw_id: entity.id.toString(),
     access_hash: entity.accessHash?.toString() || null,
@@ -41,9 +41,9 @@ export function peerRecord(entity, reference = '') {
 }
 
 export function inputPeer(peer) {
-  if (!peer) throw new UserError('شناسه ذخیره نشده؛ دوباره با یوزرنیم یا لینک اضافه کنید.');
+  if (!peer) throw new UserError('Reference is not saved; add it again using a username or link.');
   if (peer.kind === 'chat') return new Api.InputPeerChat({ chatId: bigInt(peer.raw_id) });
-  if (!peer.access_hash) throw new UserError('Access hash موجود نیست؛ از /sync یا یوزرنیم استفاده کنید.');
+  if (!peer.access_hash) throw new UserError('Access hash is missing; use /sync or a username.');
   return peer.kind === 'user'
     ? new Api.InputPeerUser({ userId: bigInt(peer.raw_id), accessHash: bigInt(peer.access_hash) })
     : new Api.InputPeerChannel({ channelId: bigInt(peer.raw_id), accessHash: bigInt(peer.access_hash) });
@@ -60,20 +60,20 @@ export class PeerService {
       else if (join) {
         const updates = await this.client.invoke(new Api.messages.ImportChatInvite({ hash: parsed.value }));
         entity = updates.chats?.[0];
-        if (!entity) throw new UserError('عضویت هنوز تأیید نشده؛ پس از تأیید دوباره تلاش کنید.');
-      } else throw new UserError('ابتدا با /join LINK عضو شوید؛ افزودن لینک به‌تنهایی باعث عضویت نمی‌شود.');
+        if (!entity) throw new UserError('Membership is not confirmed yet; try again after it is approved.');
+      } else throw new UserError('Join first with /join LINK; adding a link does not join the chat.');
     } else {
       const cached = parsed.type === 'id' ? this.store.peer(parsed.value) : null;
       try {
         entity = await this.client.getEntity(cached ? inputPeer(cached) : parsed.type === 'id' ? bigInt(parsed.value) : parsed.value);
       } catch (error) {
-        if (parsed.type === 'id' && !error.errorMessage) throw new UserError('این ID برای اکانت شناخته‌شده نیست. /sync را اجرا کنید یا از یوزرنیم/لینک استفاده کنید.');
+        if (parsed.type === 'id' && !error.errorMessage) throw new UserError('This ID is not known to the account. Run /sync or use a username/link.');
         throw error;
       }
       if (join && entity instanceof Api.Channel) {
         const result = await this.client.invoke(new Api.channels.JoinChannel({ channel: utils.getInputChannel(entity) }));
         entity = result.chats?.find(c => c.id?.equals(entity.id)) || entity;
-      } else if (join) throw new UserError('برای عضویت در گروه خصوصی، لینک دعوت لازم است.');
+      } else if (join) throw new UserError('An invite link is required to join a private group.');
     }
     const peer = this.store.savePeer(peerRecord(entity, reference));
     return { peer, entity };
@@ -95,5 +95,5 @@ export class PeerService {
 
 export function describe(peer) {
   const clean = value => String(value).replace(/[\r\n\u202a-\u202e\u2066-\u2069]/g, ' ');
-  return `${clean(peer.name)}${peer.username ? ` | @${clean(peer.username)}` : ''}\nID: ${peer.peer_id || peer.id}\nورودی: ${clean(peer.reference)}`;
+  return `${clean(peer.name)}${peer.username ? ` | @${clean(peer.username)}` : ''}\nID: ${peer.peer_id || peer.id}\nReference: ${clean(peer.reference)}`;
 }

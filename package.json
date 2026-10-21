@@ -2,7 +2,7 @@
   "name": "telepass",
   "version": "1.0.0",
   "private": true,
-  "description": "Low-resource Telegram userbot with persistent SQLite forwarding queue and Persian administration",
+  "description": "Low-resource Telegram userbot with persistent SQLite forwarding queue and English administration",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
