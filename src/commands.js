@@ -1,3 +1,5 @@
+import { CustomFile } from 'teleproto/client/uploads.js';
+import { exportData, importData, sampleData, MAX_JSON_BYTES } from './backup.js';
 import { ADMIN_ID } from './config.js';
 import { isAdminMessage } from './filter.js';
 import { describe, inputPeer } from './peers.js';
@@ -11,6 +13,7 @@ const MENU = `Telepass Admin Menu
 5 — Pause / Resume
 6 — Queue & Errors
 7 — Command Help
+8 — JSON data backup
 /menu — Main menu | /cancel — Cancel input`;
 const HELP = `Admin commands (send each command as a separate message):
 /source list [PAGE]
@@ -19,12 +22,16 @@ const HELP = `Admin commands (send each command as a separate message):
 /allow list [PAGE]
 /allow add REF
 /allow remove RULE_NUMBER
-/rule RULE_NUMBER forwards on|off
-/rule RULE_NUMBER replies on|off
+/rule RULE_NUMBER|all forwards on|off
+/rule RULE_NUMBER|all replies on|off
 /destination set REF
 /destination show
 /join LINK_OR_USERNAME
 /sync
+/linked REF
+/data export
+/data sample
+/data import merge|replace confirm
 /pause | /resume
 /status | /errors
 /queue clear confirm
@@ -36,6 +43,14 @@ Rule numbers are shown by /allow list.
 forwards: allow messages that were forwarded to the sender? Default: on.
 replies: also forward the original message replied to? Default: off.
 Each whitelist rule has independent forwards and replies settings.
+Use all instead of a rule number to update all existing rules (not future rules).
+Anonymous owners/admins cannot be identified individually: whitelist their GROUP.
+/linked GROUP_REF discovers its linked channel (or the reverse).
+For discussion posts: source = group, whitelist = linked channel; forwards must be on.
+/data import requires /pause, then upload a JSON document within 5 minutes.
+Merge updates/adds entries; replace deletes existing database contents.
+Exports include jobs/history and access hashes, NOT login sessions or environment secrets.
+Sample IDs/hashes are fake: edit them before using. Keep backups private.
 Groups can be whitelisted for anonymous-admin / send-as-group messages.
 Adding a source does not join it; use /join first.
 Pausing stops both new message intake and queued delivery.`;
@@ -70,7 +85,31 @@ export class Commands {
     try {
       target = await message.getInputSender().catch(() => null) || ADMIN_ID;
       const text = String(message.message || '').trim();
+      if (message.document) {
+        if (!this.pending?.importMode || Date.now() > this.pending.expires) {
+          this.pending = null;
+          throw new UserError('First use /data import merge|replace confirm; then upload the JSON document within 5 minutes.');
+        }
+        const mode = this.pending.importMode;
+        this.pending = null;
+        if (this.store.get('paused') !== '1') throw new UserError('Use /pause before importing.');
+        if (BigInt(message.document.size ?? MAX_JSON_BYTES + 1) > BigInt(MAX_JSON_BYTES)) throw new UserError('Maximum JSON size is 8 MiB.');
+        const buffer = await this.client.downloadMedia(message);
+        if (!Buffer.isBuffer(buffer) || buffer.length > MAX_JSON_BYTES) throw new UserError('Could not download a valid JSON document (8 MiB maximum).');
+        await this.beforeImport?.();
+        await this.reply(importData(this.store, buffer.toString('utf8'), mode), target);
+        return;
+      }
       if (!text || text.length > 2048) return;
+      if (['/data export', '/data sample'].includes(text)) {
+        const sample = text === '/data sample';
+        const buffer = Buffer.from(JSON.stringify(sample ? sampleData() : exportData(this.store), null, 2));
+        await this.client.sendFile(target, {
+          file: new CustomFile(sample ? 'telepass-sample.json' : 'telepass-backup.json', buffer.length, '', buffer),
+          forceDocument: true, caption: sample ? 'TEST DATA ONLY: replace fake IDs and access hashes before importing.' : 'Private database backup. Login session and environment secrets are not included.'
+        });
+        return;
+      }
       const response = await this.execute(text);
       if (response) await this.reply(response, target || ADMIN_ID);
     } catch (error) {
@@ -85,14 +124,14 @@ export class Commands {
     let text = raw.replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
     if (text === '/cancel') { this.pending = null; return 'Input cancelled.\n' + MENU; }
     if (['/start', '/menu', '0'].includes(text)) { this.pending = null; return MENU; }
-    if (!text.startsWith('/') && this.pending) {
+    if (!text.startsWith('/') && this.pending?.prefix) {
       const pending = this.pending; this.pending = null;
       if (Date.now() > pending.expires) throw new UserError('Input expired. Please select an option from the menu again.');
       text = `${pending.prefix} ${text}`;
     }
     const menus = {
       '1': '/status', '2': '/sources-menu', '3': '/allow-menu', '4': '/destination-menu',
-      '5': this.store.get('paused') === '1' ? '/resume' : '/pause', '6': '/queue-menu', '7': '/help',
+      '5': this.store.get('paused') === '1' ? '/resume' : '/pause', '6': '/queue-menu', '7': '/help', '8': '/data-menu',
       '21': '/source list', '31': '/allow list', '41': '/destination show', '61': '/errors'
     };
     text = menus[text] || text;
@@ -106,9 +145,19 @@ export class Commands {
     };
     if (prompts[text]) return this.prompt(...prompts[text]);
     const [cmd, ...args] = text.split(/\s+/);
-    if (cmd === '/help' && !args.length) return HELP;
+    if (cmd === '/data-menu') return 'JSON data\n/data export — Download all database data\n/data sample — Download test structure\n/pause then /data import merge confirm — Update/add\n/pause then /data import replace confirm — Delete and replace ALL data\nAfter import, check configuration before /resume.';
+    if (cmd === '/data' && args[0] === 'import' && args.length === 3 && ['merge', 'replace'].includes(args[1]) && args[2] === 'confirm') {
+      if (this.store.get('paused') !== '1') throw new UserError('Use /pause before importing.');
+      this.pending = { importMode: args[1], expires: Date.now() + 300000 };
+      return `Upload the JSON document within 5 minutes. Mode: ${args[1]}. ${args[1] === 'replace' ? 'WARNING: all current database data will be replaced.' : 'Existing records are updated; new records are added. Existing jobs are not replayed.'} /cancel to cancel.`;
+    }
+    if (cmd === '/linked' && args.length === 1) {
+      const peer = await this.peers.linked(args[0]);
+      return `Linked chat found (nothing automatically enabled):\n${describe(peer)}\nFor discussion messages, add the GROUP as /source add GROUP_ID and the CHANNEL as /allow add CHANNEL_ID. Keep forwards on for the channel rule. For anonymous admins, /allow add GROUP_ID; Telegram hides their individual identity. Join the group first if needed.`;
+    }
+    if (cmd === '/help'  && !args.length) return HELP;
     if (cmd === '/sources-menu') return 'Sources\n21 — List sources\n22 — Add source\n23 — Remove source\n/menu — Main menu';
-    if (cmd === '/allow-menu') return 'Whitelist\n31 — List rules\n32 — Add whitelist entry\n33 — Remove rule\n34 — Change forwards / replies\n/menu — Main menu';
+    if (cmd === '/allow-menu') return 'Whitelist\n31 — List rules\n32 — Add whitelist entry\n33 — Remove rule\n34 — Change forwards / replies (rule number or all)\n/menu — Main menu';
     if (cmd === '/destination-menu') return 'Destination\n41 — Show destination\n42 — Set destination\n/menu — Main menu';
     if (cmd === '/queue-menu') return `Pending jobs: ${this.store.pendingCount()}\n61 — Recent errors\nTo clear the queue: /queue clear confirm\n/menu — Main menu`;
     if (cmd === '/status' && !args.length) {
@@ -149,8 +198,9 @@ export class Commands {
     }
     if (cmd === '/rule' && args.length === 3) {
       if (!['on', 'off'].includes(args[2])) throw new UserError('Value must be on or off.');
-      this.store.toggle(number(args[0]), args[1], args[2] === 'on');
-      return `Rule #${args[0]}: ${args[1]} = ${args[2]}\nThis affects future messages; jobs already in the queue are unchanged.`;
+      if (args[0] === 'all') this.store.toggleAll(args[1], args[2] === 'on');
+      else this.store.toggle(number(args[0]), args[1], args[2] === 'on');
+      return `${args[0] === 'all' ? 'All existing rules' : `Rule #${args[0]}`}: ${args[1]} = ${args[2]}\nThis affects future messages; jobs already in the queue are unchanged.`;
     }
     if (cmd === '/destination') {
       if (args[0] === 'show' && args.length === 1) {

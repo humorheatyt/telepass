@@ -95,6 +95,7 @@ async function main() {
     try { saveSession(client, config.sessionPath); }
     catch (error) { logError('session_save', error); }
     worker = new ForwardWorker(client, store);
+    commands.beforeImport = async () => { await worker.busy; };
     worker.start();
     maintenance = setInterval(() => { try { store.prune(); } catch (e) { logError('maintenance', e); } }, 3600000);
     sessionTimer = setInterval(() => { try { saveSession(client, config.sessionPath); } catch (e) { logError('session_save', e); } }, 60000);

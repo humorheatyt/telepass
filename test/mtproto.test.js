@@ -57,3 +57,26 @@ test('real MTProto group reply preserves original-first ordering', async t => {
   assert.equal(store.pendingCount(), 2);
   assert.equal(store.nextJob().message_id, 10);
 });
+
+test('real anonymous group owner and linked-channel discussion posts use visible identities', async t => {
+  const { deliver, store, rule } = wire(t);
+  // Whitelisting the hidden human alone cannot identify an anonymous message.
+  const anonymous = id => new Api.Message({ id, peerId: new Api.PeerChannel({ channelId: bigInt('111') }),
+    fromId: new Api.PeerChannel({ channelId: bigInt('111') }), postAuthor: 'Owner', message: 'Anonymous', date: 1 });
+  await deliver(anonymous(30));
+  assert.equal(store.pendingCount(), 0);
+  const group = store.addRule('-100111');
+  await deliver(anonymous(31));
+  assert.equal(store.nextJob().rule_id, group.id);
+  store.clearPending();
+  const channel = store.addRule('-100222');
+  const discussion = id => new Api.Message({ id, peerId: new Api.PeerChannel({ channelId: bigInt('111') }),
+    fromId: new Api.PeerChannel({ channelId: bigInt('222') }),
+    fwdFrom: new Api.MessageFwdHeader({ date: 1, fromId: new Api.PeerChannel({ channelId: bigInt('222') }), channelPost: 5 }),
+    message: 'Discussion post', date: 1 });
+  await deliver(discussion(32));
+  assert.equal(store.nextJob().rule_id, channel.id);
+  store.clearPending(); store.toggle(channel.id, 'forwards', false);
+  await deliver(discussion(33));
+  assert.equal(store.pendingCount(), 0);
+});

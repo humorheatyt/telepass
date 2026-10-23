@@ -77,3 +77,37 @@ test('source deletion, queue clear confirmation and help are reachable', async t
   assert.match(await commands.execute('/help'), /\/join/);
   assert.match(await commands.execute('/status'), /RAM/);
 });
+
+test('bulk toggles update existing rules only and validate field/value', async t => {
+  const { commands, store } = setup(t);
+  store.addRule('99');
+  await commands.execute('/rule all forwards off');
+  await commands.execute('/rule all replies on');
+  assert.ok(store.rules().every(r => r.forwards === 0 && r.replies === 1));
+  const group = store.addRule('-100111');
+  assert.equal(group.forwards, 1); assert.equal(group.replies, 0);
+  await assert.rejects(commands.execute('/rule all invalid on'), /Invalid setting/);
+  await assert.rejects(commands.execute('/rule all replies yes'), /on or off/);
+});
+
+test('JSON export/sample upload and authorized import document flow', async t => {
+  const { commands, store, client } = setup(t);
+  const files = [];
+  client.sendFile = async (target, params) => files.push(params);
+  const admin = extra => message({ senderId: ADMIN_ID, isPrivate: true, getInputSender: async () => 'admin-peer', ...extra });
+  await commands.handle(admin({ message: '/data export' }));
+  await commands.handle(admin({ message: '/data sample' }));
+  assert.equal(files.length, 2);
+  assert.equal(files[0].file.name, 'telepass-backup.json');
+  await assert.rejects(commands.execute('/data import merge confirm'), /pause/);
+  await commands.execute('/pause');
+  await commands.execute('/data import merge confirm');
+  const { sampleData } = await import('../src/backup.js');
+  client.downloadMedia = async () => Buffer.from(JSON.stringify(sampleData()));
+  let waited = false; commands.beforeImport = async () => { waited = true; };
+  await commands.handle(admin({ message: '', document: { size: 1000 } }));
+  assert.equal(waited, true);
+  assert.ok(store.ruleFor('-100111'));
+  assert.equal(commands.pending, null);
+  assert.equal(store.get('paused'), '1');
+});

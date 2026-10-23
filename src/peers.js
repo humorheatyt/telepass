@@ -78,6 +78,16 @@ export class PeerService {
     const peer = this.store.savePeer(peerRecord(entity, reference));
     return { peer, entity };
   }
+  async linked(reference) {
+    const { entity } = await this.resolve(reference);
+    if (!(entity instanceof Api.Channel)) throw new UserError('Linked discussions require a channel or supergroup.');
+    const result = await this.client.invoke(new Api.channels.GetFullChannel({ channel: utils.getInputChannel(entity) }));
+    const id = result.fullChat.linkedChatId;
+    if (!id || id.toString() === '0') throw new UserError('No linked channel/discussion group found.');
+    const linked = result.chats.find(chat => chat.id?.toString() === id.toString());
+    if (!linked) throw new UserError('Linked chat is not accessible. Join it and run /sync first.');
+    return this.store.savePeer(peerRecord(linked));
+  }
   async sync() {
     let count = 0;
     // Bound both RAM and RPC work; no message/media is stored.

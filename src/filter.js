@@ -1,3 +1,4 @@
+import { utils } from 'teleproto';
 import { ADMIN_ID } from './config.js';
 
 export function isAdminMessage(message) {
@@ -12,7 +13,9 @@ export function matchMessage(store, message) {
   const destination = store.get('destination');
   if (!destination || source === destination || !store.hasSource(source)) return null;
   if (!Number.isSafeInteger(message.id) || message.id <= 0 || message.action) return null;
-  const sender = message.senderId?.toString();
+  // Prefer the explicit MTProto identity (anonymous admins / send-as-channel).
+  // Never infer the hidden human identity from a signature or forwarded header.
+  const sender = message.fromId ? utils.getPeerId(message.fromId).toString() : message.senderId?.toString();
   if (!sender) return null;
   const rule = store.ruleFor(sender);
   if (!rule || (message.fwdFrom && !rule.forwards)) return null;

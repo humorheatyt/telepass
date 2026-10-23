@@ -93,6 +93,10 @@ export class Store {
     if (!rule) throw new UserError('Whitelist rule not found.');
     this.db.prepare(`UPDATE rules SET ${field}=? WHERE id=?`).run(value ? 1 : 0, id);
   }
+  toggleAll(field, value) {
+    if (!['forwards', 'replies'].includes(field)) throw new UserError('Invalid setting.');
+    return this.db.prepare(`UPDATE rules SET ${field}=?`).run(value ? 1 : 0).changes;
+  }
   setDestination(id) {
     if (this.hasSource(id)) throw new UserError('The destination cannot be a source; remove it from the source list first.');
     if (this.pendingCount() && this.get('destination') !== id) throw new UserError('Drain the queue first, or clear it with /queue clear confirm.');
