@@ -1,4 +1,4 @@
-import { utils } from 'teleproto';
+import { Api, utils } from 'teleproto';
 import { ADMIN_ID } from './config.js';
 
 export function isAdminMessage(message) {
@@ -15,7 +15,16 @@ export function matchMessage(store, message) {
   if (!Number.isSafeInteger(message.id) || message.id <= 0 || message.action) return null;
   // Prefer the explicit MTProto identity (anonymous admins / send-as-channel).
   // Never infer the hidden human identity from a signature or forwarded header.
-  const sender = message.fromId ? utils.getPeerId(message.fromId).toString() : message.senderId?.toString();
+  let sender = message.fromId ? utils.getPeerId(message.fromId).toString() : message.senderId?.toString();
+  // MTProto can omit fromId when the sender is the channel/supergroup itself.
+  // Teleproto synthesizes senderId for channel posts, but not for non-post
+  // supergroup messages. Only fall back for incoming channel peers with no
+  // sender at all: never override an explicit user/channel, use a forwarded
+  // identity, or treat an unidentified outgoing/private/basic-chat message as
+  // anonymous. The group still needs its own explicit whitelist rule.
+  if (!sender && !message.out && message.peerId instanceof Api.PeerChannel) {
+    sender = utils.getPeerId(message.peerId).toString();
+  }
   if (!sender) return null;
   const rule = store.ruleFor(sender);
   if (!rule || (message.fwdFrom && !rule.forwards)) return null;

@@ -1,3 +1,4 @@
+import { adminTextChunks, normalizeDigits } from './admin-text.js';
 import { CustomFile } from 'teleproto/client/uploads.js';
 import { exportData, importData, sampleData, MAX_JSON_BYTES } from './backup.js';
 import { ADMIN_ID } from './config.js';
@@ -14,7 +15,7 @@ const MENU = `Telepass Admin Menu
 6 — Queue & Errors
 7 — Command Help
 8 — JSON data backup
-/menu — Main menu | /cancel — Cancel input`;
+0 — Main menu: /menu | /cancel — Cancel input`;
 const HELP = `Admin commands (send each command as a separate message):
 /source list [PAGE]
 /source add REF
@@ -72,9 +73,9 @@ export class Commands {
     this.pending = null; this.busy = false;
   }
   async reply(text, target = ADMIN_ID) {
-    // Text only. Names/references cannot inject formatting or link previews.
-    for (let i = 0; i < text.length; i += 3500) {
-      await this.client.sendMessage(target, { message: text.slice(i, i + 3500), parseMode: false, linkPreview: false });
+    // Explicit code entities make commands copyable without parsing user content.
+    for (const chunk of adminTextChunks(text)) {
+      await this.client.sendMessage(target, { ...chunk, parseMode: false, linkPreview: false });
     }
   }
   async handle(message) {
@@ -84,7 +85,8 @@ export class Commands {
     let target = ADMIN_ID;
     try {
       target = await message.getInputSender().catch(() => null) || ADMIN_ID;
-      const text = String(message.message || '').trim();
+      let text = normalizeDigits(String(message.message || '').trim());
+      if (!this.pending?.prefix) text = ({ '81': '/data export', '82': '/data sample' })[text] || text;
       if (message.document) {
         if (!this.pending?.importMode || Date.now() > this.pending.expires) {
           this.pending = null;
@@ -121,7 +123,7 @@ export class Commands {
     return `${text}\n/cancel to cancel; expires in 5 minutes.`;
   }
   async execute(raw) {
-    let text = raw.replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+    let text = normalizeDigits(raw);
     if (text === '/cancel') { this.pending = null; return 'Input cancelled.\n' + MENU; }
     if (['/start', '/menu', '0'].includes(text)) { this.pending = null; return MENU; }
     if (!text.startsWith('/') && this.pending?.prefix) {
@@ -132,20 +134,29 @@ export class Commands {
     const menus = {
       '1': '/status', '2': '/sources-menu', '3': '/allow-menu', '4': '/destination-menu',
       '5': this.store.get('paused') === '1' ? '/resume' : '/pause', '6': '/queue-menu', '7': '/help', '8': '/data-menu',
-      '21': '/source list', '31': '/allow list', '41': '/destination show', '61': '/errors'
+      '21': '/source list', '25': '/sync', '31': '/allow list', '41': '/destination show', '61': '/errors',
+      '85': '/pause', '86': '/resume'
     };
     text = menus[text] || text;
     const prompts = {
       '22': ['/source add', 'Send the source link or ID.'],
       '23': ['/source remove', 'Send the full source ID from the list (for example, -1001234567890).'],
+      '24': ['/join', 'Send the invite link or username to join.'],
+      '26': ['/linked', 'Send the group or channel link or ID to find its linked chat.'],
       '32': ['/allow add', 'Send the link or ID of the allowed person, group, or channel.'],
       '33': ['/allow remove', 'Send the rule number shown in the whitelist.'],
       '34': ['/rule', 'Send the rule number, setting, and value; for example: 1 forwards off or 1 replies on.'],
-      '42': ['/destination set', 'Send the destination link or ID.']
+      '42': ['/destination set', 'Send the destination link or ID.'],
+      '62': ['/queue clear', 'WARNING: pending jobs will be deleted. Send confirm to clear the queue.'],
+      '83': ['/data import merge', 'Send confirm to update/add data, then upload the JSON document.'],
+      '84': ['/data import replace', 'WARNING: ALL database data will be replaced. Send confirm, then upload the JSON document.']
     };
+    if (['83', '84'].includes(text) && this.store.get('paused') !== '1') {
+      throw new UserError('Use /pause or select 85 before choosing an import option.');
+    }
     if (prompts[text]) return this.prompt(...prompts[text]);
     const [cmd, ...args] = text.split(/\s+/);
-    if (cmd === '/data-menu') return 'JSON data\n/data export — Download all database data\n/data sample — Download test structure\n/pause then /data import merge confirm — Update/add\n/pause then /data import replace confirm — Delete and replace ALL data\nAfter import, check configuration before /resume.';
+    if (cmd === '/data-menu') return 'JSON data\n81 — Download database backup: /data export\n82 — Download test structure: /data sample\n83 — Import merge (confirmation required): /data import merge confirm\n84 — Import replace ALL data (confirmation required): /data import replace confirm\n85 — Pause: /pause\n86 — Resume: /resume\nPause before importing. After import, check configuration before resuming.\n0 — Main menu: /menu';
     if (cmd === '/data' && args[0] === 'import' && args.length === 3 && ['merge', 'replace'].includes(args[1]) && args[2] === 'confirm') {
       if (this.store.get('paused') !== '1') throw new UserError('Use /pause before importing.');
       this.pending = { importMode: args[1], expires: Date.now() + 300000 };
@@ -156,10 +167,10 @@ export class Commands {
       return `Linked chat found (nothing automatically enabled):\n${describe(peer)}\nFor discussion messages, add the GROUP as /source add GROUP_ID and the CHANNEL as /allow add CHANNEL_ID. Keep forwards on for the channel rule. For anonymous admins, /allow add GROUP_ID; Telegram hides their individual identity. Join the group first if needed.`;
     }
     if (cmd === '/help'  && !args.length) return HELP;
-    if (cmd === '/sources-menu') return 'Sources\n21 — List sources\n22 — Add source\n23 — Remove source\n/menu — Main menu';
-    if (cmd === '/allow-menu') return 'Whitelist\n31 — List rules\n32 — Add whitelist entry\n33 — Remove rule\n34 — Change forwards / replies (rule number or all)\n/menu — Main menu';
-    if (cmd === '/destination-menu') return 'Destination\n41 — Show destination\n42 — Set destination\n/menu — Main menu';
-    if (cmd === '/queue-menu') return `Pending jobs: ${this.store.pendingCount()}\n61 — Recent errors\nTo clear the queue: /queue clear confirm\n/menu — Main menu`;
+    if (cmd === '/sources-menu') return 'Sources\n21 — List sources: /source list\n22 — Add source: /source add REF\n23 — Remove source: /source remove ID\n24 — Join a group/channel: /join LINK_OR_USERNAME\n25 — Sync known IDs: /sync\n26 — Find linked chat: /linked REF\n0 — Main menu: /menu';
+    if (cmd === '/allow-menu') return 'Whitelist\n31 — List rules: /allow list\n32 — Add whitelist entry: /allow add REF\n33 — Remove rule: /allow remove RULE_NUMBER\n34 — Change forwards / replies (rule number or all)\n/rule RULE_NUMBER|all forwards on|off\n/rule RULE_NUMBER|all replies on|off\n0 — Main menu: /menu';
+    if (cmd === '/destination-menu') return 'Destination\n41 — Show destination: /destination show\n42 — Set destination: /destination set REF\n0 — Main menu: /menu';
+    if (cmd === '/queue-menu') return `Pending jobs: ${this.store.pendingCount()}\n61 — Recent errors: /errors\n62 — Clear queue (confirmation required): /queue clear confirm\n0 — Main menu: /menu`;
     if (cmd === '/status' && !args.length) {
       const destination = this.store.peer(this.store.get('destination'));
       return `Status: ${this.store.get('paused') === '1' ? 'Paused' : 'Running'}\nConnection: ${this.client.connected ? 'Connected' : 'Disconnected'}\nSources: ${this.store.sources().length} | Whitelist rules: ${this.store.rules().length}\nQueue: ${this.store.pendingCount()} / 5000\nEvents rejected because the queue was full: ${this.store.get('overflow_events', '0')}\nRAM usage: ${Math.round(process.memoryUsage().rss / 1048576)} MB\nProcess uptime: ${Math.floor(process.uptime() / 60)} minutes\nDestination: ${destination ? describe(destination) : 'Not set'}\n${this.store.stats().map(s => `${s.status}: ${s.n}`).join(' | ')}\nDelivery errors: /errors`;
