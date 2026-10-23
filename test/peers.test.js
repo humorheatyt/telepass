@@ -60,3 +60,24 @@ test('private invite never silently joins when adding a source', async t => {
   assert.equal(result.peer.id, '-100123');
   assert.ok(calls.at(-1) instanceof Api.messages.ImportChatInvite);
 });
+
+test('linked discovery resolves full channel metadata from either side without enabling monitoring', async t => {
+  const { store } = fixture(); t.after(() => store.close());
+  const group = new Api.Channel({ id: bigInt('111'), accessHash: bigInt('123'), title: 'Group', megagroup: true, photo: new Api.ChatPhotoEmpty(), date: 1 });
+  const channel = new Api.Channel({ id: bigInt('222'), accessHash: bigInt('456'), title: 'Channel', broadcast: true, photo: new Api.ChatPhotoEmpty(), date: 1 });
+  const client = {
+    getEntity: async () => group,
+    invoke: async request => {
+      assert.ok(request instanceof Api.channels.GetFullChannel);
+      return { fullChat: { linkedChatId: bigInt('222') }, chats: [group, channel] };
+    }
+  };
+  const peers = new PeerService(client, store);
+  assert.equal((await peers.linked('-100111')).id, '-100222');
+  assert.equal(store.rules().length, 1);
+  client.getEntity = async () => channel;
+  client.invoke = async () => ({ fullChat: { linkedChatId: bigInt('111') }, chats: [group, channel] });
+  assert.equal((await peers.linked('-100222')).kind, 'supergroup');
+  client.invoke = async () => ({ fullChat: {}, chats: [] });
+  await assert.rejects(peers.linked('-100222'), /No linked/);
+});
