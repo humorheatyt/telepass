@@ -111,3 +111,89 @@ test('JSON export/sample upload and authorized import document flow', async t =>
   assert.equal(commands.pending, null);
   assert.equal(store.get('paused'), '1');
 });
+
+test('admin help and all submenus send copyable command entities', async t => {
+  const { commands, sent } = setup(t);
+  for (const input of ['/help', '2', '3', '4', '6', '8']) {
+    await commands.handle(message({ senderId: ADMIN_ID, isPrivate: true,
+      getInputSender: async () => 'admin-peer', message: input }));
+    const response = sent.at(-1);
+    assert.equal(response.parseMode, false);
+    assert.equal(response.linkPreview, false);
+    assert.ok(response.formattingEntities.length > 0, input);
+    const spans = response.formattingEntities.map(entity => response.message.slice(entity.offset, entity.offset + entity.length));
+    assert.ok(spans.every(span => span.startsWith('/')));
+    if (input === '8') {
+      assert.ok(spans.includes('/data export'));
+      assert.ok(spans.includes('/data import replace confirm'));
+      for (const n of [81, 82, 83, 84, 85, 86, 0]) assert.match(response.message, new RegExp(`(?:^|\\n)${n} —`));
+    }
+  }
+});
+
+test('numbered backup downloads work with English, Persian and Arabic digits', async t => {
+  const { commands, client } = setup(t);
+  const files = [];
+  client.sendFile = async (target, params) => files.push({ target, ...params });
+  for (const input of ['81', '۸۲', '٨١']) {
+    await commands.handle(message({ senderId: ADMIN_ID, isPrivate: true,
+      getInputSender: async () => 'admin-peer', message: input }));
+  }
+  assert.deepEqual(files.map(file => file.file.name), ['telepass-backup.json', 'telepass-sample.json', 'telepass-backup.json']);
+  assert.ok(files.every(file => file.target === 'admin-peer'));
+});
+
+test('numbered imports require pause and explicit confirmation and support cancel/expiry', async t => {
+  const { commands, store } = setup(t);
+  await assert.rejects(commands.execute('83'), /pause/i);
+  assert.equal(commands.pending, null);
+  await commands.execute('۸۵');
+  assert.equal(store.get('paused'), '1');
+  await commands.execute('83');
+  assert.equal(commands.pending.prefix, '/data import merge');
+  await commands.execute('confirm');
+  assert.equal(commands.pending.importMode, 'merge');
+  assert.equal(store.rules().length, 1);
+  await commands.execute('/cancel');
+  assert.match(await commands.execute('84'), /ALL database data/);
+  await commands.execute('confirm');
+  assert.equal(commands.pending.importMode, 'replace');
+  await commands.execute('0');
+  assert.equal(commands.pending, null);
+  await commands.execute('84');
+  commands.pending.expires = 0;
+  await assert.rejects(commands.execute('confirm'), /expired/i);
+  assert.equal(commands.pending, null);
+  await commands.execute('86');
+  assert.equal(store.get('paused'), '0');
+});
+
+test('numbered queue clearing requires confirmation and can be cancelled', async t => {
+  const { commands, store, rule } = setup(t);
+  store.enqueue('-100111', [10], '-100222', rule.id);
+  assert.match(await commands.execute('6'), /62 —/);
+  await commands.execute('62');
+  assert.equal(store.pendingCount(), 1);
+  await commands.execute('/cancel');
+  assert.equal(store.pendingCount(), 1);
+  await commands.execute('62');
+  await commands.execute('confirm');
+  assert.equal(store.pendingCount(), 0);
+});
+
+test('source submenu shortcuts and numeric reference inputs do not conflict', async t => {
+  const { commands, store } = setup(t);
+  assert.match(await commands.execute('25'), /Saved 3 IDs/);
+  await commands.execute('24');
+  assert.equal(commands.pending.prefix, '/join');
+  await commands.execute('0');
+  await commands.execute('26');
+  assert.equal(commands.pending.prefix, '/linked');
+  await commands.execute('/cancel');
+  // 81 is data-export only outside an input prompt.
+  store.savePeer({ id: '81', kind: 'user', raw_id: '81', access_hash: '1', name: 'User', username: null, reference: '81' });
+  await commands.execute('32');
+  await commands.handle(message({ senderId: ADMIN_ID, isPrivate: true,
+    getInputSender: async () => 'admin-peer', message: '81' }));
+  assert.ok(store.ruleFor('81'));
+});

@@ -93,3 +93,11 @@ test('real replies inside forum topics still include their original message', as
   assert.equal(store.nextJob().message_id, 8);
   assert.equal(store.pendingCount(), 2);
 });
+
+test('missing sender on its own never implies an anonymous group sender', t => {
+  const { store } = fixture(); t.after(() => store.close());
+  store.addRule('-100111');
+  // A chatId or a display signature is not MTProto sender evidence.
+  assert.equal(matchMessage(store, message({ senderId: null, postAuthor: 'Owner' })), null);
+  assert.equal(isAdminMessage(message({ senderId: null, isPrivate: true, postAuthor: 'Owner' })), false);
+});
